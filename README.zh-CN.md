@@ -151,9 +151,8 @@ model.export(format="onnx", quantize=16)  # FP16（半精度）
 
 > **精度 / 量化：** Ultralytics ≥8.4 使用统一的 `quantize` 参数，取代已弃用的
 > `half=True` / `int8=True` 标志。对于 ONNX，支持的取值为 `32`/`fp32`（FP32，默认）、
-> `16`/`fp16`（FP16）和 `8`/`int8`（INT8——需通过 `data=` 提供校准数据集）。旧的
-> `half=True`（→ `quantize=16`）和 `int8=True`（→ `quantize=8`）仍可用，但会
-> 触发弃用警告。详见
+> `16`/`fp16`（FP16）和 `8`/`int8`（INT8——需通过 `data=` 提供校准数据集）。旧标志
+> 仍可使用，但会触发弃用警告。详见
 > [导出文档](https://docs.ultralytics.com/modes/export) 和
 > [ONNX 集成指南](https://docs.ultralytics.com/integrations/onnx)。
 
@@ -214,7 +213,7 @@ ultralytics-inference predict
 ```text
 WARNING ⚠️ 'model' argument is missing. Using default '--model=yolo26n.onnx'.
 WARNING ⚠️ 'source' argument is missing. Using default images: https://ultralytics.com/images/bus.jpg, https://ultralytics.com/images/zidane.jpg
-Ultralytics Inference 0.0.35 🚀 Rust ONNX FP32 CPU
+Ultralytics Inference 0.0.36 🚀 Rust ONNX FP32 CPU
 Using ONNX Runtime CPUExecutionProvider
 YOLO26n summary: 80 classes, imgsz=(640, 640)
 
@@ -234,7 +233,7 @@ ultralytics-inference predict --task segment
 ```text
 WARNING ⚠️ 'model' argument is missing. Using default '--model=yolo26n-seg.onnx'.
 WARNING ⚠️ 'source' argument is missing. Using default images: https://ultralytics.com/images/bus.jpg, https://ultralytics.com/images/zidane.jpg
-Ultralytics Inference 0.0.35 🚀 Rust ONNX FP32 CPU
+Ultralytics Inference 0.0.36 🚀 Rust ONNX FP32 CPU
 Using ONNX Runtime CPUExecutionProvider
 YOLO26n-seg summary: 80 classes, imgsz=(640, 640)
 
@@ -275,7 +274,7 @@ ultralytics-inference predict --model <model.onnx> --source <source>
 | `--imgsz`       |      | 推理图片尺寸                                                                                                                                                      | 模型元数据                        |
 | `--rect`        |      | 启用矩形推理（最小填充）                                                                                                                                          | `true`                            |
 | `--batch`       |      | 推理 batch size                                                                                                                                                   | `1`                               |
-| `--half`        |      | 使用 FP16 半精度推理                                                                                                                                              | `false`                           |
+| `--quantize`    |      | 推理精度：`8`、`16`、`32`、`int8`、`fp16`、`fp32`、`w8a8`、`w16a16`、`w8a16` 或 `w8a32`                                                                           | 模型精度                          |
 | `--save`        |      | 将标注结果保存到 runs/\<task\>/predict                                                                                                                            | `true`                            |
 | `--save-frames` |      | 为视频输入保存单帧（而不是视频文件）                                                                                                                              | `false`                           |
 | `--save-json`   |      | 保存语义分割类别图 PNG，便于外部评估                                                                                                                              | `false`                           |
@@ -283,6 +282,8 @@ ultralytics-inference predict --model <model.onnx> --source <source>
 | `--device`      |      | 设备字符串，例如 cpu、cuda:0、coreml、directml:0、intel:cpu、intel:gpu、intel:npu、tensorrt:0、rocm:0、xnnpack；启用 feature 后可选择更多提供方（见 Features 表） | `cpu`                             |
 | `--verbose`     |      | 显示详细输出                                                                                                                                                      | `true`                            |
 | `--classes`     |      | 按类别 ID 过滤，例如 `0`、`"0,1,2"` 或 `"[0, 1, 2]"`                                                                                                              | 所有类别                          |
+
+旧版 `--half` 标志仍可向后兼容，会映射为 `--quantize 16`，并发出与 Ultralytics Python 相同的弃用警告。显式的 `--quantize` 值优先。
 
 **任务和模型解析：**
 
@@ -331,7 +332,7 @@ YOLOv8、YOLO11 和 YOLO26 ONNX 模型支持 **n / s / m / l / x** 尺寸，并�
 ```toml
 # crates.io 稳定版本
 [dependencies]
-ultralytics-inference = "0.0.35"
+ultralytics-inference = "0.0.36"
 ```
 
 ```toml
@@ -544,7 +545,7 @@ cargo build --release --features "cuda,tensorrt"
 
 ```toml
 [dependencies]
-ultralytics-inference = { version = "0.0.35", features = ["coreml", "xnnpack"] }
+ultralytics-inference = { version = "0.0.36", features = ["coreml", "xnnpack"] }
 ort = { version = "=2.0.0-rc.13", features = ["lax-feature-matching"] }
 ```
 

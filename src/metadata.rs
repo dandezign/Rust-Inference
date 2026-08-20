@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::{InferenceError, Result};
+use crate::inference::{Quantization, handle_deprecated_precision};
 use crate::task::Task;
 
 /// Metadata extracted from an Ultralytics YOLO ONNX model.
@@ -39,7 +40,10 @@ pub struct ModelMetadata {
     pub imgsz: Option<(usize, usize)>,
     /// Number of input channels (typically 3 for RGB).
     pub channels: usize,
-    /// Whether the model uses FP16 (half precision).
+    /// Precision recorded by the model export metadata.
+    pub quantize: Option<Quantization>,
+    /// Legacy FP16 metadata alias. Use [`Self::quantize`] instead.
+    #[doc(hidden)]
     pub half: bool,
     /// Class ID to class name mapping.
     pub names: Arc<HashMap<usize, String>>,
@@ -99,6 +103,8 @@ impl ModelMetadata {
     pub fn from_yaml_str(yaml_str: &str) -> Result<Self> {
         let mut metadata = Self::default();
         let mut names: HashMap<usize, String> = HashMap::new();
+        let mut quantize_set = false;
+        let mut half = None;
 
         for line in yaml_str.lines() {
             let line = line.trim();
@@ -140,19 +146,27 @@ impl ModelMetadata {
                             ))
                         })?;
                     }
+                    "quantize" => {
+                        metadata.quantize = Self::parse_quantize(value)?;
+                        quantize_set = true;
+                    }
                     "half" => {
-                        metadata.half = value == "true" || value == "True";
+                        half = Some(Self::parse_bool(value));
                     }
                     "end2end" => {
                         metadata.end2end = value == "true" || value == "True";
                     }
                     "args" => {
-                        // Parse args dict for half flag: {'half': True, ...}
-                        if value.contains("'half': True")
-                            || value.contains("\"half\": true")
-                            || value.contains("'half':True")
+                        if !quantize_set
+                            && let Some(value) = Self::parse_args_value(value, "quantize")
                         {
-                            metadata.half = true;
+                            metadata.quantize = Self::parse_quantize(value)?;
+                            quantize_set = true;
+                        }
+                        if half.is_none()
+                            && let Some(value) = Self::parse_args_value(value, "half")
+                        {
+                            half = Some(Self::parse_bool(value));
                         }
                     }
                     _ => {
@@ -164,6 +178,11 @@ impl ModelMetadata {
                 }
             }
         }
+
+        if !quantize_set {
+            metadata.quantize = handle_deprecated_precision(None, half);
+        }
+        metadata.half = metadata.quantize == Some(Quantization::Fp16);
 
         // imgsz is a two-integer list (`[640, 640]` inline or a `- 640` block),
         // parsed with the same helper as kpt_shape.
@@ -180,6 +199,47 @@ impl ModelMetadata {
 
         metadata.names = Arc::new(names);
         Ok(metadata)
+    }
+
+    fn parse_quantize(value: &str) -> Result<Option<Quantization>> {
+        let value = value.trim().trim_matches(|c| c == '\'' || c == '"');
+        if value.eq_ignore_ascii_case("none")
+            || value.eq_ignore_ascii_case("null")
+            || value.is_empty()
+        {
+            return Ok(None);
+        }
+        value.parse().map(Some).map_err(|e| {
+            InferenceError::ModelLoadError(format!("Invalid quantize value in metadata: {e}"))
+        })
+    }
+
+    fn parse_args_value<'a>(args: &'a str, name: &str) -> Option<&'a str> {
+        let single_quoted = format!("'{name}'");
+        let double_quoted = format!("\"{name}\"");
+        let (_, value) = [single_quoted.as_str(), double_quoted.as_str()]
+            .iter()
+            .find_map(|key| args.split_once(key))?;
+        Some(
+            value
+                .trim_start()
+                .strip_prefix(':')
+                .unwrap_or(value)
+                .split([',', '}'])
+                .next()
+                .unwrap_or_default(),
+        )
+    }
+
+    fn parse_bool(value: &str) -> bool {
+        !matches!(
+            value
+                .trim()
+                .trim_matches(|c| c == '\'' || c == '"')
+                .to_ascii_lowercase()
+                .as_str(),
+            "none" | "false" | "0" | ""
+        )
     }
 
     /// Parse a two-integer YAML value for `key`, accepting either the inline form
@@ -357,6 +417,7 @@ impl Default for ModelMetadata {
             batch: 1,
             imgsz: None,
             channels: 3,
+            quantize: None,
             half: false,
             names: Arc::new(HashMap::new()),
             end2end: false,
@@ -477,6 +538,20 @@ channels: 3
     }
 
     #[test]
+    fn test_precision_metadata_compatibility() {
+        let metadata = ModelMetadata::from_yaml_str("args: {'half': True}").unwrap();
+        assert_eq!(metadata.quantize, Some(Quantization::Fp16));
+        assert!(metadata.half);
+
+        let metadata = ModelMetadata::from_yaml_str(
+            "quantize: 32\nhalf: true\nargs: {'quantize': 16, 'half': True}",
+        )
+        .unwrap();
+        assert_eq!(metadata.quantize, Some(Quantization::Fp32));
+        assert!(!metadata.half);
+    }
+
+    #[test]
     fn test_tflite_style_metadata_text() {
         // The `.tflite` reader rebuilds this text (unquoted `names:` block, inline
         // lists) and hands it to `from_yaml_str`, exactly like the ONNX path.
@@ -502,18 +577,22 @@ channels: 3
     }
 
     #[test]
-    fn test_pose_kpt_shape_and_half_flags() {
-        let yaml = "task: pose\nkpt_shape: [17, 3]\nhalf: true\nend2end: True";
+    fn test_pose_kpt_shape_and_quantize() {
+        let yaml = "task: pose\nkpt_shape: [17, 3]\nquantize: 16\nend2end: True";
         let m = ModelMetadata::from_yaml_str(yaml).unwrap();
         assert_eq!(m.task, Task::Pose);
         assert_eq!(m.kpt_shape, Some((17, 3)));
-        assert!(m.half);
+        assert_eq!(m.quantize, Some(Quantization::Fp16));
         assert!(m.end2end);
 
-        // half can also arrive embedded in an args dict.
-        let yaml2 = "task: detect\nargs: {'half': True, 'imgsz': 640}";
+        // Quantize normally arrives embedded in the exporter args dictionary.
+        let yaml2 = "task: detect\nargs: {'quantize': 'w8a16', 'imgsz': 640}";
         let m2 = ModelMetadata::from_yaml_str(yaml2).unwrap();
-        assert!(m2.half);
+        assert_eq!(m2.quantize, Some(Quantization::W8a16));
+
+        let yaml3 = "task: detect\nargs: {'quantize': None, 'imgsz': 640}";
+        let m3 = ModelMetadata::from_yaml_str(yaml3).unwrap();
+        assert_eq!(m3.quantize, None);
     }
 
     #[test]

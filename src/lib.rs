@@ -131,7 +131,7 @@
 //! | `--imgsz` | | Inference image size | Model metadata |
 //! | `--rect` | | Enable rectangular inference (minimal padding) | `true` |
 //! | `--batch` | | Batch size for inference | `1` |
-//! | `--half` | | Use FP16 half-precision inference | `false` |
+//! | `--quantize` | | Inference precision (`8`, `16`, `32`, `int8`, `fp16`, `fp32`, `w8a8`, `w16a16`, `w8a16`, or `w8a32`) | Model precision |
 //! | `--save` | | Save annotated results to runs/\<task\>/predict | `true` |
 //! | `--save-frames` | | Save individual frames for video input | `false` |
 //! | `--save-json` | | Save semantic segmentation class-map PNGs for external evaluation | `false` |
@@ -139,6 +139,10 @@
 //! | `--device` | | Device (cpu, cuda:0, coreml, directml:0, intel:cpu, intel:gpu, intel:npu, tensorrt:0, xnnpack) | `cpu` |
 //! | `--verbose` | | Show verbose output | `true` |
 //! | `--classes` | | Filter by class IDs, e.g. `0` or `"0,1,2"` or `"[0, 1, 2]"` | all classes |
+//!
+//! The legacy `--half` flag remains accepted for backward compatibility, maps
+//! to `--quantize 16`, and emits the same deprecation warning as Ultralytics
+//! Python. An explicit `--quantize` value wins.
 //!
 //! \* `semantic` (semantic segmentation) and `depth` (depth estimation) are YOLO26-only.
 //!
@@ -169,9 +173,8 @@
 //! yolo export model=yolo26n-depth.pt format=onnx
 //! ```
 //!
-//! Add `quantize=16` for an FP16 (half-precision) ONNX, or `quantize=8` for INT8
-//! (which also needs a calibration dataset via `data=`). Requires Ultralytics
-//! >= 8.4; `quantize` replaces the deprecated `half`/`int8` flags.
+//! Add `quantize=16` for an FP16 ONNX, or `quantize=8` for INT8 (which also
+//! needs a calibration dataset via `data=`). Requires Ultralytics >= 8.4.
 //!
 //! The task is auto-detected from ONNX metadata:
 //!
@@ -419,7 +422,7 @@ pub mod utils;
 
 pub use device::Device;
 pub use error::{InferenceError, Result};
-pub use inference::InferenceConfig;
+pub use inference::{InferenceConfig, Quantization};
 pub use metadata::ModelMetadata;
 #[cfg(not(target_arch = "wasm32"))]
 pub use model::YOLOModel;

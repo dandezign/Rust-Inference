@@ -208,7 +208,8 @@ await annotate(canvas, img, results, { depthAlpha: 0.6 });
 
   > Ultralytics ≥8.4 uses the `quantize` argument instead of the deprecated
   > `half=True` / `int8=True` flags. For ONNX the supported values are
-  > `32`/`fp32` (default), `16`/`fp16`, and `8`/`int8`.
+  > `32`/`fp32` (default), `16`/`fp16`, and `8`/`int8`; the old flags still work
+  > but emit a deprecation warning.
 
 - **Runtime assets**: on first load, `ort-web` fetches the ONNX Runtime Web wasm
   bundle (~25 MB, browser-cached afterward) from `cdn.pyke.io`. If you set a

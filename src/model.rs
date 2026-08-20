@@ -24,7 +24,7 @@ use rayon::slice::ParallelSliceMut;
 
 use crate::download::{DEFAULT_IMAGES, DEFAULT_OBB_IMAGE, download_image, try_download_model};
 use crate::error::{InferenceError, Result};
-use crate::inference::InferenceConfig;
+use crate::inference::{InferenceConfig, Quantization};
 use crate::metadata::ModelMetadata;
 use crate::postprocessing::postprocess;
 use crate::preprocessing::{
@@ -146,7 +146,8 @@ impl YOLOModel {
     ///
     /// Returns an error if the model file doesn't exist or can't be loaded.
     #[cfg_attr(coverage_nightly, coverage(off))]
-    pub fn load_with_config<P: AsRef<Path>>(path: P, config: InferenceConfig) -> Result<Self> {
+    pub fn load_with_config<P: AsRef<Path>>(path: P, mut config: InferenceConfig) -> Result<Self> {
+        config.normalize_precision();
         let path = path.as_ref();
 
         // Check if file exists, attempt auto-download if not
@@ -242,7 +243,7 @@ impl YOLOModel {
                 }
                 #[cfg(feature = "tensorrt")]
                 crate::Device::TensorRt(i) => eps.push((
-                    Self::build_tensorrt_ep(path, *i as i32, config.half, cuda_pre_stream_ptr),
+                    Self::build_tensorrt_ep(path, *i as i32, config.quantize, cuda_pre_stream_ptr),
                     "TensorRTExecutionProvider",
                 )),
                 #[cfg(feature = "rocm")]
@@ -286,7 +287,7 @@ impl YOLOModel {
             // Default: Register all available providers in preference order
             #[cfg(feature = "tensorrt")]
             eps.push((
-                Self::build_tensorrt_ep(path, 0, config.half, cuda_pre_stream_ptr),
+                Self::build_tensorrt_ep(path, 0, config.quantize, cuda_pre_stream_ptr),
                 "TensorRTExecutionProvider",
             ));
 
@@ -448,9 +449,20 @@ impl YOLOModel {
             }
         };
 
+        let quantize = if provider_name == "TensorRTExecutionProvider" {
+            Some(if config.quantize == Some(Quantization::Fp16) {
+                Quantization::Fp16
+            } else {
+                Quantization::Fp32
+            })
+        } else {
+            fp16_input
+                .then_some(Quantization::Fp16)
+                .or(metadata.quantize)
+        };
         let config = InferenceConfig {
             imgsz: Some(resolved_imgsz),
-            half: config.half || metadata.half, // Use half if user requested OR model was exported with half
+            quantize,
             ..config
         };
 
@@ -542,7 +554,7 @@ impl YOLOModel {
 
     /// Build the `TensorRT` execution provider with engine + timing caches enabled.
     ///
-    /// FP16 is enabled when `fp16` is true (driven by `config.half`). On Ada and
+    /// FP16 is enabled for `quantize=16`. On Ada and
     /// newer GPUs this is ~2x faster than FP32 with negligible accuracy delta
     /// for YOLO detection. Engine and timing caches are written under
     /// `<model_dir>/.trt_cache/<model_stem>_{fp16,fp32}/` so subsequent loads
@@ -555,7 +567,7 @@ impl YOLOModel {
     fn build_tensorrt_ep(
         model_path: &Path,
         device_id: i32,
-        fp16: bool,
+        quantize: Option<Quantization>,
         compute_stream: Option<*mut ()>,
     ) -> ort::ep::ExecutionProviderDispatch {
         let stem = model_path
@@ -563,6 +575,7 @@ impl YOLOModel {
             .and_then(|s| s.to_str())
             .unwrap_or("model");
         let parent = model_path.parent().unwrap_or_else(|| Path::new("."));
+        let fp16 = quantize == Some(Quantization::Fp16);
         let suffix = if fp16 { "fp16" } else { "fp32" };
         let cache_dir = parent.join(".trt_cache").join(format!("{stem}_{suffix}"));
         let mut ep = ort::ep::TensorRT::default()
@@ -893,8 +906,6 @@ impl YOLOModel {
 
         // Ultralytics stores metadata under individual keys
         // Try to get each key separately and build a YAML string
-        let mut metadata_map: HashMap<String, String> = HashMap::new();
-
         // List of all Ultralytics metadata keys
         let keys = [
             "description",
@@ -908,6 +919,7 @@ impl YOLOModel {
             "batch",
             "imgsz",
             "names",
+            "quantize",
             "half",
             "channels",
             "args",
@@ -915,37 +927,28 @@ impl YOLOModel {
             "kpt_shape",
         ];
 
-        for key in &keys {
-            if let Some(value) = model_metadata.custom(key) {
-                metadata_map.insert((*key).to_string(), value);
-            }
-        }
-
-        // If we found individual keys, build a YAML string from them
-        if !metadata_map.is_empty() {
-            let mut yaml_parts = Vec::new();
-            for (key, value) in &metadata_map {
-                yaml_parts.push(format!("{key}: {value}"));
-            }
-            let combined_yaml = yaml_parts.join("\n");
-            let mut combined_map = HashMap::new();
-            combined_map.insert(String::new(), combined_yaml);
-            return ModelMetadata::from_onnx_metadata(&combined_map);
+        let metadata_yaml: Vec<_> = keys
+            .iter()
+            .filter_map(|key| {
+                model_metadata
+                    .custom(key)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!("{key}: {value}"))
+            })
+            .collect();
+        if !metadata_yaml.is_empty() {
+            return ModelMetadata::from_yaml_str(&metadata_yaml.join("\n"));
         }
 
         // Also try getting metadata from a single combined key
         for key in &["", "metadata", "model_metadata"] {
-            if let Some(value) = model_metadata.custom(key) {
-                metadata_map.insert((*key).to_string(), value);
+            if let Some(value) = model_metadata.custom(key)
+                && !value.is_empty()
+            {
+                return ModelMetadata::from_yaml_str(&value);
             }
         }
-
-        if metadata_map.is_empty() {
-            // Return defaults
-            return Ok(ModelMetadata::default());
-        }
-
-        ModelMetadata::from_onnx_metadata(&metadata_map)
+        Ok(ModelMetadata::default())
     }
 
     /// Returns the execution provider used for inference.
@@ -1523,9 +1526,18 @@ impl YOLOModel {
                 };
 
                 if task == Task::Classify {
-                    preprocess_image_center_crop(image, current_target_size, fp16_input)
+                    preprocess_image_center_crop(
+                        image,
+                        current_target_size,
+                        fp16_input.then_some(Quantization::Fp16),
+                    )
                 } else {
-                    preprocess_image_with_precision(image, current_target_size, stride, fp16_input)
+                    preprocess_image_with_precision(
+                        image,
+                        current_target_size,
+                        stride,
+                        fp16_input.then_some(Quantization::Fp16),
+                    )
                 }
             })
             .collect();
@@ -1976,7 +1988,14 @@ impl YOLOModel {
         self.metadata.stride
     }
 
-    /// Check if model is using FP16 (half precision) inference.
+    /// Get the resolved model precision.
+    #[must_use]
+    pub const fn quantize(&self) -> Option<Quantization> {
+        self.config.quantize
+    }
+
+    /// Check whether the resolved model precision is FP16.
+    #[doc(hidden)]
     #[must_use]
     pub const fn is_half(&self) -> bool {
         self.fp16_input
@@ -2167,8 +2186,18 @@ mod tests {
         // FP16 preprocessing keeps both tensors, so one pair feeds both concat paths.
         let pair = || {
             [
-                crate::preprocessing::preprocess_image_with_precision(&img, (64, 64), 32, true),
-                crate::preprocessing::preprocess_image_with_precision(&img, (64, 64), 32, true),
+                crate::preprocessing::preprocess_image_with_precision(
+                    &img,
+                    (64, 64),
+                    32,
+                    Some(Quantization::Fp16),
+                ),
+                crate::preprocessing::preprocess_image_with_precision(
+                    &img,
+                    (64, 64),
+                    32,
+                    Some(Quantization::Fp16),
+                ),
             ]
         };
         // two images stacked on the batch axis
