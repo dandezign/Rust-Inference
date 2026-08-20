@@ -143,6 +143,8 @@
 //! The legacy `--half` flag remains accepted for backward compatibility, maps
 //! to `--quantize 16`, and emits the same deprecation warning as Ultralytics
 //! Python. An explicit `--quantize` value wins.
+//! On CPU, `--quantize 32` promotes an FP16 ONNX graph before session creation.
+//! The compact FP16 source remains unchanged.
 //!
 //! \* `semantic` (semantic segmentation) and `depth` (depth estimation) are YOLO26-only.
 //!
@@ -175,6 +177,7 @@
 //!
 //! Add `quantize=16` for an FP16 ONNX, or `quantize=8` for INT8 (which also
 //! needs a calibration dataset via `data=`). Requires Ultralytics >= 8.4.
+//! On CPU, loading an FP16 ONNX with `quantize=32` promotes it to FP32 in memory.
 //!
 //! The task is auto-detected from ONNX metadata:
 //!
@@ -406,6 +409,8 @@ pub mod download;
 pub mod io;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod model;
+#[cfg(not(target_arch = "wasm32"))]
+mod onnx;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod source;
 
