@@ -214,7 +214,7 @@ ultralytics-inference predict
 ```text
 WARNING ⚠️ 'model' argument is missing. Using default '--model=yolo26n.onnx'.
 WARNING ⚠️ 'source' argument is missing. Using default images: https://ultralytics.com/images/bus.jpg, https://ultralytics.com/images/zidane.jpg
-Ultralytics Inference 0.0.37 🚀 Rust ONNX FP32 CPU
+Ultralytics Inference 0.0.39 🚀 Rust ONNX FP32 CPU
 Using ONNX Runtime CPUExecutionProvider
 YOLO26n summary: 80 classes, imgsz=(640, 640)
 
@@ -234,7 +234,7 @@ ultralytics-inference predict --task segment
 ```text
 WARNING ⚠️ 'model' argument is missing. Using default '--model=yolo26n-seg.onnx'.
 WARNING ⚠️ 'source' argument is missing. Using default images: https://ultralytics.com/images/bus.jpg, https://ultralytics.com/images/zidane.jpg
-Ultralytics Inference 0.0.37 🚀 Rust ONNX FP32 CPU
+Ultralytics Inference 0.0.39 🚀 Rust ONNX FP32 CPU
 Using ONNX Runtime CPUExecutionProvider
 YOLO26n-seg summary: 80 classes, imgsz=(640, 640)
 
@@ -286,7 +286,7 @@ ultralytics-inference predict --model <model.onnx> --source <source>
 
 The legacy `--half` flag remains accepted for backward compatibility, maps to `--quantize 16`, and emits the same deprecation warning as Ultralytics Python. An explicit `--quantize` value wins.
 
-On CPU, `--quantize 32` promotes an FP16 ONNX graph to FP32 in memory before ONNX Runtime creates the inference session. The compact FP16 source remains unchanged.
+On CPU, ONNX Runtime widens an FP16 ONNX graph to FP32 weights while it builds the inference session, so an FP16 export runs at FP32 speed. The compact FP16 source file is never modified.
 
 **Task and Model Resolution:**
 
@@ -335,7 +335,7 @@ Add to your `Cargo.toml` (choose one):
 ```toml
 # Stable release from crates.io
 [dependencies]
-ultralytics-inference = "0.0.37"
+ultralytics-inference = "0.0.39"
 ```
 
 ```toml
@@ -551,7 +551,7 @@ Each accelerator feature links a prebuilt ONNX Runtime containing that provider.
 
 ```toml
 [dependencies]
-ultralytics-inference = { version = "0.0.37", features = ["coreml", "xnnpack"] }
+ultralytics-inference = { version = "0.0.39", features = ["coreml", "xnnpack"] }
 ort = { version = "=2.0.0-rc.13", features = ["lax-feature-matching"] }
 ```
 
@@ -609,7 +609,7 @@ It ships as the [`@ultralytics/yolo`](web/README.md) npm package:
 ```ts
 import { YOLO } from "@ultralytics/yolo";
 
-const model = await YOLO.load("yolo26n.onnx");
+const model = await YOLO.load("/models/yolo26n.onnx");
 const results = await model.predict("bus.jpg");
 console.log(results.boxes); // [{ x1, y1, x2, y2, conf, cls, name, color }, ...]
 ```
