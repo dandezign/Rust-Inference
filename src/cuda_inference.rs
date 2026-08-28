@@ -132,7 +132,13 @@ impl CudaStreamHandle {
         let ctx = CudaContext::new(device_id).map_err(|e| {
             InferenceError::ModelLoadError(format!("cudarc CudaContext::new({device_id}): {e:?}"))
         })?;
-        let stream = ctx.default_stream();
+        // A real (non-blocking) stream, never `default_stream()`: that one carries a NULL
+        // `CUstream`, and ORT reads a null `user_compute_stream` as "none given" and runs
+        // the session on a stream of its own. The preprocess kernels would then be
+        // unordered against inference, which reads the input buffer before they land.
+        let stream = ctx.new_stream().map_err(|e| {
+            InferenceError::ModelLoadError(format!("cudarc new_stream({device_id}): {e:?}"))
+        })?;
         Ok(Self {
             ctx,
             stream,
@@ -419,10 +425,14 @@ mod tests {
     #[test]
     fn stream_handle_open() {
         let handle = CudaStreamHandle::open(0).expect("open CUDA device 0");
-        // cudarc hands back CUDA's default stream, whose raw pointer is null by
-        // design, so only assert that the accessor is callable (it feeds ort's
-        // with_compute_stream) rather than that it is non-null.
-        let _ = handle.raw_stream_ptr();
+        // This pointer is what `with_compute_stream` hands ORT. A null one (which is what
+        // `default_stream()` would give) reads as "no stream supplied", so ORT runs the
+        // session on its own stream and the preprocess kernels stop being ordered against
+        // inference. Assert it is real, or that regression passes unnoticed.
+        assert!(
+            !handle.raw_stream_ptr().is_null(),
+            "the preprocess stream must be a real stream, not CUDA's null default"
+        );
     }
 
     #[test]
