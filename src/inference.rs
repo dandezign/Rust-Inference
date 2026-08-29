@@ -155,6 +155,13 @@ pub struct InferenceConfig {
     /// default). In every other configuration the value is ignored and the
     /// standard CPU preprocess path runs.
     pub cuda_preprocess: bool,
+    /// Upper bound, in bytes, on the CUDA execution provider's memory arena.
+    ///
+    /// `None` (default) lets the arena grow as far as the device allows. Only
+    /// consulted with the `cuda` feature and a CUDA device: a `TensorRT` device
+    /// ignores it, as does a limit of `0`. The cap covers the arena alone, so
+    /// peak device memory stays well above it.
+    pub cuda_memory_limit: Option<usize>,
 }
 
 impl Default for InferenceConfig {
@@ -174,6 +181,7 @@ impl Default for InferenceConfig {
             rect: Self::DEFAULT_RECT,
             classes: None,
             cuda_preprocess: Self::DEFAULT_CUDA_PREPROCESS,
+            cuda_memory_limit: None,
         }
     }
 }
@@ -477,6 +485,32 @@ impl InferenceConfig {
     pub fn keep_class(&self, class_id: usize) -> bool {
         self.classes.as_ref().is_none_or(|c| c.contains(&class_id))
     }
+
+    /// Cap the CUDA execution provider's memory arena at `limit` bytes.
+    ///
+    /// Use this to stop ONNX Runtime from reserving most of the GPU so the
+    /// device can be shared with other processes. Has no effect unless the
+    /// crate is built with the `cuda` feature and a CUDA device is selected.
+    /// A limit the graph cannot fit in fails the load with an ONNX Runtime arena
+    /// error, so leave the model room to run.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use ultralytics_inference::InferenceConfig;
+    ///
+    /// // Limit the CUDA arena to 2 GiB.
+    /// let config = InferenceConfig::new().with_cuda_memory_limit(2 * 1024 * 1024 * 1024);
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// * The modified `InferenceConfig`.
+    #[must_use]
+    pub const fn with_cuda_memory_limit(mut self, limit: usize) -> Self {
+        self.cuda_memory_limit = Some(limit);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -529,7 +563,8 @@ mod tests {
             .with_device(crate::Device::Cpu)
             .with_save(false)
             .with_save_frames(true)
-            .with_rect(false);
+            .with_rect(false)
+            .with_cuda_memory_limit(2 * 1024 * 1024 * 1024);
 
         assert_eq!(config.batch, Some(4));
         assert_eq!(config.quantize, Some(Quantization::Fp16));
@@ -538,6 +573,7 @@ mod tests {
         assert!(!config.save);
         assert!(config.save_frames);
         assert!(!config.rect);
+        assert_eq!(config.cuda_memory_limit, Some(2 * 1024 * 1024 * 1024));
     }
 
     #[test]

@@ -130,6 +130,13 @@ What to expect and how to avoid surprises:
 > You cannot load a standalone `.engine` file directly (that needs the native
 > TensorRT runtime); the `.trt_cache/` engine is an internal ORT artifact.
 
+### Sharing the GPU with other processes
+
+`InferenceConfig::with_cuda_memory_limit(bytes)` caps the CUDA EP's memory arena so a long-running session cannot take
+the whole card. The cap covers the arena only: the CUDA context and the cuDNN workspaces sit outside it, so peak device
+memory stays well above the limit, and a cap the model cannot run in fails the load. Detections and speed are unchanged
+by the cap. A `Device::TensorRt` session ignores the setting, and so does a limit of `0`.
+
 ### `cuda-preprocess` feature
 
 No separate type or API. With the feature compiled in and a CUDA/TensorRT
