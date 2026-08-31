@@ -2011,6 +2011,7 @@ fn shape_to_usize(shape: &[i64]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -2036,7 +2037,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // `#[serial]` with the other session-building test: providers compile into one shared
+    // cache, and two sessions building it at once collide there.
     #[test]
+    #[serial]
     fn test_model_accessors_with_dummy() {
         // The accessors need a real instance (YOLOModel wraps an ORT session and can't be
         // mocked), so this only asserts when yolo26n.onnx is present or downloadable.
