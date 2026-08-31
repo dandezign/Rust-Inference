@@ -68,36 +68,64 @@ fn get_covariance_params(w: f32, h: f32, angle: f32) -> (f32, f32, f32) {
 /// `ProbIoU` value between 0.0 and 1.0
 #[must_use]
 pub fn calculate_probiou(box1: &[f32; 5], box2: &[f32; 5]) -> f32 {
+    probiou_prepared(&ProbIouBox::new(box1), &ProbIouBox::new(box2))
+}
+
+/// A rotated box reduced to the terms [`probiou_prepared`] needs.
+///
+/// The covariance `(a, b, c)` and its determinant depend only on one box, but
+/// [`calculate_probiou`] recomputed them for both boxes of every pair, putting four trig
+/// calls inside an O(n^2) loop. Building this once per box moves that work to O(n).
+#[derive(Clone, Copy)]
+struct ProbIouBox {
+    x: f32,
+    y: f32,
+    a: f32,
+    b: f32,
+    c: f32,
+    /// `a * b - c^2`, clamped at zero for the `t3` denominator.
+    det: f32,
+}
+
+impl ProbIouBox {
+    /// Reduce every box once, keeping each score and class alongside it so the shared
+    /// suppression loop can consume the result directly.
+    fn prepare_all(boxes: &[([f32; 5], f32, usize)]) -> Vec<(Self, f32, usize)> {
+        boxes
+            .iter()
+            .map(|(b, score, class)| (Self::new(b), *score, *class))
+            .collect()
+    }
+
+    fn new(b: &[f32; 5]) -> Self {
+        let (a, bb, c) = get_covariance_params(b[2], b[3], b[4]);
+        Self {
+            x: b[0],
+            y: b[1],
+            a,
+            b: bb,
+            c,
+            det: a.mul_add(bb, -c.powi(2)).max(0.0),
+        }
+    }
+}
+
+/// [`calculate_probiou`] over two boxes whose covariance terms are already computed.
+fn probiou_prepared(p1: &ProbIouBox, p2: &ProbIouBox) -> f32 {
     let eps = 1e-7;
 
-    let x1 = box1[0];
-    let y1 = box1[1];
-    let w1 = box1[2];
-    let h1 = box1[3];
-    let r1 = box1[4];
+    let (a1, b1, c1) = (p1.a, p1.b, p1.c);
+    let (a2, b2, c2) = (p2.a, p2.b, p2.c);
+    let (x1, y1, x2, y2) = (p1.x, p1.y, p2.x, p2.y);
 
-    let x2 = box2[0];
-    let y2 = box2[1];
-    let w2 = box2[2];
-    let h2 = box2[3];
-    let r2 = box2[4];
+    let denom = (a1 + a2).mul_add(b1 + b2, -(c1 + c2).powi(2) + eps);
 
-    let (a1, b1, c1) = get_covariance_params(w1, h1, r1);
-    let (a2, b2, c2) = get_covariance_params(w2, h2, r2);
+    let t1 = ((a1 + a2).mul_add((y1 - y2).powi(2), (b1 + b2) * (x1 - x2).powi(2)) / denom) * 0.25;
 
-    let t1 = ((a1 + a2).mul_add((y1 - y2).powi(2), (b1 + b2) * (x1 - x2).powi(2))
-        / (a1 + a2).mul_add(b1 + b2, -(c1 + c2).powi(2) + eps))
-        * 0.25;
-
-    let t2 = (((c1 + c2) * (x2 - x1) * (y1 - y2))
-        / (a1 + a2).mul_add(b1 + b2, -(c1 + c2).powi(2) + eps))
-        * 0.5;
+    let t2 = (((c1 + c2) * (x2 - x1) * (y1 - y2)) / denom) * 0.5;
 
     let t3_num = (a1 + a2).mul_add(b1 + b2, -(c1 + c2).powi(2));
-    let t3_den = 4.0f32.mul_add(
-        ((a1.mul_add(b1, -c1.powi(2))).max(0.0) * (a2.mul_add(b2, -c2.powi(2))).max(0.0)).sqrt(),
-        eps,
-    );
+    let t3_den = 4.0f32.mul_add((p1.det * p2.det).sqrt(), eps);
     let t3 = (t3_num / t3_den + eps).ln() * 0.5;
 
     let bd = (t1 + t2 + t3).clamp(eps, 100.0);
@@ -210,7 +238,12 @@ pub(crate) fn nms_per_class_capped(
 /// Indices of boxes to keep
 #[must_use]
 pub fn nms_rotated_per_class(boxes: &[([f32; 5], f32, usize)], iou_threshold: f32) -> Vec<usize> {
-    nms_by_class(boxes, iou_threshold, usize::MAX, calculate_probiou)
+    nms_by_class(
+        &ProbIouBox::prepare_all(boxes),
+        iou_threshold,
+        usize::MAX,
+        probiou_prepared,
+    )
 }
 
 /// [`nms_rotated_per_class`], stopping once `max_det` boxes are kept. See
@@ -220,7 +253,12 @@ pub(crate) fn nms_rotated_per_class_capped(
     iou_threshold: f32,
     max_det: usize,
 ) -> Vec<usize> {
-    nms_by_class(boxes, iou_threshold, max_det, calculate_probiou)
+    nms_by_class(
+        &ProbIouBox::prepare_all(boxes),
+        iou_threshold,
+        max_det,
+        probiou_prepared,
+    )
 }
 
 /// Simple pluralization for common COCO class names.
