@@ -74,7 +74,7 @@ impl FromStr for Quantization {
             "w8a32" => Ok(Self::W8a32),
             _ => Err(format!(
                 "'quantize={value}' is invalid. Valid 'quantize' values are 8, 16, 32, \
-                 'int8', 'fp16', 'fp32', 'w8a8', 'w16a16', 'w8a16', or 'w8a32'. \
+                 'int8', 'fp16', 'fp32', 'w8a8', 'w16a16', 'w32a32', 'w8a16', or 'w8a32'. \
                  See https://docs.ultralytics.com/modes/export#quantization-options"
             )),
         }
@@ -126,7 +126,9 @@ pub struct InferenceConfig {
     /// If `None`, defaults to 1 (single-image inference).
     pub batch: Option<usize>,
     /// Number of intra-op threads for ONNX Runtime.
-    /// Setting this to `0` allows ONNX Runtime to choose the optimal number.
+    /// Setting this to `0` lets [`YOLOModel::load`](crate::YOLOModel::load) resolve it to
+    /// [`std::thread::available_parallelism`] when it builds the session, falling back to
+    /// `4` if that cannot be determined.
     pub num_threads: usize,
     /// Requested inference precision. `None` uses the model's native precision.
     pub quantize: Option<Quantization>,
@@ -172,7 +174,7 @@ impl Default for InferenceConfig {
             max_det: Self::DEFAULT_MAX_DET,
             imgsz: None,
             batch: None,
-            num_threads: 0, // 0 = let ONNX Runtime decide (typically uses all cores efficiently)
+            num_threads: 0, // 0 = resolve to `available_parallelism()` when the session is built
             quantize: Self::DEFAULT_QUANTIZE,
             half: Self::DEFAULT_HALF,
             device: None,
@@ -312,7 +314,7 @@ impl InferenceConfig {
     ///
     /// # Arguments
     ///
-    /// * `threads` - The number of intra-op threads. Set to `0` for auto-configuration.
+    /// * `threads` - The number of intra-op threads. Set to `0` to use every available core.
     ///
     /// # Returns
     ///
