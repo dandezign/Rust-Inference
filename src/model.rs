@@ -327,6 +327,12 @@ impl YOLOModel {
         let provider_name = eps
             .first()
             .map_or("CPUExecutionProvider", |&(_, name)| name);
+        // XNNPACK runs its own threadpool whatever its priority, so this is a "registered
+        // at all" check rather than "is primary": in the auto path it is registered last
+        // and still executes the subgraphs the providers ahead of it decline.
+        let uses_xnnpack = eps
+            .iter()
+            .any(|&(_, name)| name == "XNNPACKExecutionProvider");
 
         if !eps.is_empty() {
             crate::info!(
@@ -376,6 +382,13 @@ impl YOLOModel {
         } else {
             ort::session::builder::GraphOptimizationLevel::Level3
         };
+
+        if uses_xnnpack {
+            session_builder = session_builder.with_intra_op_spinning(false).map_err(|e| {
+                InferenceError::ModelLoadError(format!("Failed to disable intra-op spinning: {e}"))
+            })?;
+        }
+
         session_builder = session_builder
             .with_optimization_level(optimization_level)
             .map_err(|e| {
